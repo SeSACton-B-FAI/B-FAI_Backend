@@ -1,0 +1,320 @@
+api: http://localhost:8000/api/route/search
+response:
+{
+  "start_station": "강남",
+  "end_station": "잠실",
+  "user_location": {
+    "lat": 37.497952,
+    "lon": 127.027619
+  },
+  "user_tags": {
+    "mobility_level": "wheelchair",
+    "need_elevator": true,
+    "prefer_short": true,
+    "need_charging_info": false
+  }
+}
+request:
+{
+    "route_id": 0,
+    "start_station": "강남역",
+    "end_station": "잠실역",
+    "line": "2호선",
+    "direction": "잠실역 방면",
+    "estimated_time_minutes": 9,
+    "distance_meters": 6641,
+    "start_exit_number": "1",
+    "start_exit_has_elevator": true,
+    "start_exit_gps": {
+        "lat": 37.49805,
+        "lon": 127.0286275
+    },
+    "end_exit_number": "6",
+    "end_exit_has_elevator": true,
+    "end_exit_gps": {
+        "lat": 37.5140537,
+        "lon": 127.0991215
+    },
+    "recommended_car_start": 7,
+    "recommended_car_end": 8,
+    "recommended_car_reason": "6번 출구 엘리베이터와 가까운 위치",
+    "start_elevator_status": {
+        "elevators": [],
+        "all_working": true
+    },
+    "end_elevator_status": {
+        "elevators": [],
+        "all_working": true
+    },
+    "exit_closures": {
+        "is_closed": false
+    },
+    "checkpoints": [
+        {
+            "id": 0,
+            "type": "출발지",
+            "location": "현재 위치",
+            "latitude": null,
+            "longitude": null,
+            "radius": 30,
+            "data": {},
+            "optional": false
+        },
+        {
+            "id": 1,
+            "type": "출발역_출구",
+            "location": "강남역 1번 출구",
+            "latitude": 37.49805,
+            "longitude": 127.0286275,
+            "radius": 30,
+            "data": {
+                "has_elevator": true,
+                "elevator_type": "외부E/V"
+            },
+            "optional": false
+        },
+        {
+            "id": 2,
+            "type": "출발역_승강장",
+            "location": "강남역 2호선 잠실역 방면",
+            "latitude": null,
+            "longitude": null,
+            "radius": 30,
+            "data": {
+                "best_car_start": 7,
+                "best_car_end": 8
+            },
+            "optional": false
+        },
+        {
+            "id": 3,
+            "type": "승강장_대기",
+            "location": "강남역 2호선 승강장",
+            "latitude": null,
+            "longitude": null,
+            "radius": 30,
+            "data": {},
+            "optional": false
+        },
+        {
+            "id": 4,
+            "type": "열차_탑승",
+            "location": "열차 내부",
+            "latitude": null,
+            "longitude": null,
+            "radius": 30,
+            "data": {
+                "estimated_time": 9
+            },
+            "optional": false
+        },
+        {
+            "id": 5,
+            "type": "도착역_승강장",
+            "location": "잠실역 2호선 승강장",
+            "latitude": null,
+            "longitude": null,
+            "radius": 30,
+            "data": {},
+            "optional": false
+        },
+        {
+            "id": 6,
+            "type": "도착역_출구",
+            "location": "잠실역 6번 출구",
+            "latitude": 37.5140537,
+            "longitude": 127.0991215,
+            "radius": 30,
+            "data": {
+                "has_elevator": true
+            },
+            "optional": false
+        }
+    ],
+    "status": "정상",
+    "warnings": []
+}
+
+api:http://localhost:8000/api/checkpoint/guide
+request:
+{
+  "checkpoint_id": 1,
+  "station_name": "강남",
+  "exit_number": "3",
+  "platform_direction": null,
+  "need_elevator": true
+}
+response:
+{
+    "checkpoint_id": 1,
+    "checkpoint_type": "출입구",
+    "guide_text": "🚇 강남역 3번 출구에 도착하셨습니다. \n⚠️ 이 출구에는 엘리베이터가 없습니다. \n\n엘리베이터를 타고 승강장으로 이동하세요.",
+    "status": "정상",
+    "db_data": {
+        "exit_number": "3",
+        "has_elevator": false,
+        "elevator_type": null,
+        "description": null,
+        "floor_level": null,
+        "gps": {
+            "lat": 37.496666,
+            "lon": 127.0284757
+        },
+        "facilities": {
+            "has_nursing_room": false,
+            "has_meeting_place": false,
+            "has_auto_kiosk": false
+        }
+    },
+    "api_data": {
+        "elevator_status": {
+            "elevators": [],
+            "all_working": true
+        },
+        "elevator_details": [],
+        "exit_closure": {
+            "is_closed": false
+        }
+    },
+    "alternative_route": null
+}
+api:http://localhost:8000/api/checkpoint/guide
+request:{
+  "checkpoint_id": 2,
+  "station_name": "강남",
+  "exit_number": null,
+  "platform_direction": "잠실 방면",
+  "need_elevator": true
+}
+
+response:
+{
+    "checkpoint_id": 2,
+    "checkpoint_type": "승강장",
+    "guide_text": "🚉 강남역 잠실 방면 승강장에 도착하셨습니다. \n\n🚇 약 3분 후 열차가 도착합니다. \n\n⚠️ 열차가 완전히 멈춘 후 타세요. 서두르지 마세요. 열차 문이 열리면 천천히 탑승하세요.\n\n💡 안내 정보를 준비 중입니다. 잠시만 기다려주세요.",
+    "status": "정상",
+    "db_data": {
+        "station": "강남역",
+        "line": "2호선",
+        "direction": "잠실 방면",
+        "platform_type": null,
+        "floor_level": null
+    },
+    "api_data": {
+        "elevator_status": {
+            "elevators": [],
+            "all_working": true
+        },
+        "train_arrival": {
+            "next_train_minutes": 3,
+            "train_direction": "잠실 방면",
+            "is_express": false
+        }
+    },
+    "alternative_route": null
+}
+api:http://localhost:8000/api/checkpoint/guide
+request:
+{
+  "checkpoint_id": 5,
+  "station_name": "잠실",
+  "exit_number": null,
+  "platform_direction": null,
+  "need_elevator": true
+}
+response:
+{
+    "checkpoint_id": 5,
+    "checkpoint_type": "도착역_승강장",
+    "guide_text": "안내 정보를 준비 중입니다. 잠시만 기다려주세요.",
+    "status": "정상",
+    "db_data": {
+        "station": "잠실역",
+        "line": "2호선",
+        "elevator_exits": [
+            "6",
+            "9"
+        ]
+    },
+    "api_data": {
+        "elevator_status": {
+            "elevators": [],
+            "all_working": true
+        }
+    },
+    "alternative_route": null
+}
+api:http://localhost:8000/api/checkpoint/guide
+request:
+{
+  "checkpoint_id": 6,
+  "station_name": "잠실",
+  "exit_number": "4",
+  "platform_direction": null,
+  "need_elevator": true
+}
+response:
+{
+    "checkpoint_id": 6,
+    "checkpoint_type": "출입구",
+    "guide_text": "🚇 잠실역 4번 출구에 도착하셨습니다. \n⚠️ 이 출구에는 엘리베이터가 없습니다. \n\n엘리베이터를 타고 승강장으로 이동하세요.",
+    "status": "정상",
+    "db_data": {
+        "exit_number": "4",
+        "has_elevator": false,
+        "elevator_type": null,
+        "description": null,
+        "floor_level": null,
+        "gps": {
+            "lat": 37.5126596,
+            "lon": 127.0992214
+        },
+        "facilities": {
+            "has_nursing_room": false,
+            "has_meeting_place": false,
+            "has_auto_kiosk": false
+        }
+    },
+    "api_data": {
+        "elevator_status": {
+            "elevators": [],
+            "all_working": true
+        },
+        "elevator_details": [],
+        "exit_closure": {
+            "is_closed": false
+        }
+    },
+    "alternative_route": null
+}
+api:http://localhost:8000/api/checkpoint/realtime/강남
+request:
+
+response:
+{
+    "station": "강남",
+    "elevator_status": {
+        "elevators": [],
+        "all_working": true
+    },
+    "exit_closures": {
+        "is_closed": false
+    },
+    "chargers": []
+}
+
+api:http://localhost:8000/api/checkpoint/realtime/잠실
+request:
+
+response:
+{
+    "station": "잠실",
+    "elevator_status": {
+        "elevators": [],
+        "all_working": true
+    },
+    "exit_closures": {
+        "is_closed": false
+    },
+    "chargers": []
+}

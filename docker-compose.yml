@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 데이터베이스
+  db:
+    image: postgres:15-alpine
+    container_name: bfai-db
+    restart: always
+    environment:
+      POSTGRES_DB: bfai_db
+      POSTGRES_USER: bfai_user
+      POSTGRES_PASSWORD: bfai_password
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bfai_user -d bfai_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bfai-network
+
+  # FastAPI 백엔드
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bfai-backend
+    restart: always
+    environment:
+      DATABASE_URL: postgresql://bfai_user:bfai_password@db:5432/bfai_db
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: bfai_db
+      DB_USER: bfai_user
+      DB_PASSWORD: bfai_password
+      SEOUL_OPEN_API_KEY: ${SEOUL_OPEN_API_KEY}
+      SEOUL_REALTIME_API_KEY: ${SEOUL_REALTIME_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      DEBUG: "True"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./static_data:/app/static_data
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - bfai-network
+    command: >
+      sh -c "
+        echo '⏳ Waiting for database...' &&
+        sleep 5 &&
+        echo '📦 Running database migrations...' &&
+        python -c 'from app.database import init_db; init_db()' &&
+        echo '✅ Database ready!' &&
+        echo '🚀 Starting FastAPI server...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+
+  # pgAdmin (데이터베이스 관리 도구, 선택사항)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: bfai-pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@bfai.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+    networks:
+      - bfai-network
+    profiles:
+      - dev  # 개발 환경에서만 실행
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  bfai-network:
+    driver: bridge
