@@ -42,6 +42,7 @@ class StationFacility(Base):
     line = Column(String(20))
     has_elevator = Column(Boolean, default=False)
     has_wheelchair_lift = Column(Boolean, default=False)
+    has_wheelchair_charger = Column(Boolean, default=False)  # ✅ 추가
     has_transfer_parking = Column(Boolean, default=False)
     has_bike_storage = Column(Boolean, default=False)
     has_auto_kiosk = Column(Boolean, default=False)
@@ -69,6 +70,15 @@ class Exit(Base):
     longitude = Column(DECIMAL(11, 8))
     floor_level = Column(String(10))  # "B1", "1F" 등
     description = Column(Text)  # "출구 왼쪽 10m" 등
+
+    # 배리어프리 상세 안내를 위한 추가 필드
+    elevator_location = Column(String(100))  # "출구 왼쪽 10m", "출구 진입 후 직진 20m"
+    elevator_button_info = Column(String(100))  # "지하 2층 버튼을 누르세요"
+    elevator_time_seconds = Column(Integer)  # 엘리베이터 이동 소요 시간 (초)
+    gate_direction = Column(String(100))  # "엘리베이터 하차 후 왼쪽으로 직진"
+    landmark = Column(String(200))  # "스타벅스 옆", "GS25 편의점 앞"
+    has_slope = Column(Boolean, default=False)  # 경사로 여부
+    slope_info = Column(String(100))  # "완만한 경사로", "가파른 경사로 주의"
 
     # Relationship
     station = relationship("Station", back_populates="exits")
@@ -210,3 +220,66 @@ class ChargingStation(Base):
 
     def __repr__(self):
         return f"<ChargingStation(station_id={self.station_id}, location='{self.location}')>"
+
+
+class ElevatorExitMapping(Base):
+    """엘리베이터-출구 연결 정보 (승강장 내 엘리베이터 위치)"""
+    __tablename__ = "elevator_exit_mapping"
+
+    mapping_id = Column(Integer, primary_key=True, index=True)
+    station_id = Column(Integer, ForeignKey("stations.station_id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # 엘리베이터 정보
+    elevator_name = Column(String(100))  # "엘리베이터 내부#1"
+    elevator_location = Column(String(100))  # "잠실새내 방면 6-3"
+    elevator_floors = Column(String(50))  # "B2-B1"
+
+    # 연결된 출구 정보
+    connected_exit = Column(String(10))  # "6"
+
+    # 탑승 위치 정보
+    car_position_start = Column(Integer)  # 6
+    car_position_end = Column(Integer)  # 7
+    direction_from_train = Column(String(50))  # "앞쪽", "뒤쪽", "우측", "좌측"
+
+    # 도보 안내
+    walking_distance_meters = Column(Integer)  # 엘리베이터까지 거리
+    walking_time_seconds = Column(Integer)  # 소요 시간
+    walking_direction = Column(String(200))  # "하차 후 우측으로 30m 직진"
+
+    def __repr__(self):
+        return f"<ElevatorExitMapping(station_id={self.station_id}, elevator='{self.elevator_location}', exit='{self.connected_exit}')>"
+
+
+class BarrierFreeRoute(Base):
+    """배리어프리 도보 경로 정보"""
+    __tablename__ = "barrier_free_routes"
+
+    route_id = Column(Integer, primary_key=True, index=True)
+    station_id = Column(Integer, ForeignKey("stations.station_id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # 경로 타입
+    route_type = Column(String(50))  # "exit_to_platform", "platform_to_exit", "station_to_destination"
+
+    # 출발/도착 정보
+    from_location = Column(String(100))  # "3번 출구", "승강장 7-8번째 칸"
+    to_location = Column(String(100))  # "2호선 잠실 방면 승강장", "6번 출구"
+
+    # 경로 상세
+    distance_meters = Column(Integer)
+    time_seconds = Column(Integer)
+
+    # 상세 안내
+    step_by_step_guide = Column(Text)  # JSON: [{"step": 1, "action": "직진", "distance": 30, "landmark": "편의점 지나서"}]
+
+    # 경로 특성
+    has_slope = Column(Boolean, default=False)
+    slope_warning = Column(String(100))  # "가파른 경사로 주의"
+    has_stairs = Column(Boolean, default=False)  # 계단 있으면 배리어프리 아님
+    prefer_big_road = Column(Boolean, default=True)  # 큰길 우선
+
+    # 추천 점수 (높을수록 좋음)
+    accessibility_score = Column(Integer, default=100)
+
+    def __repr__(self):
+        return f"<BarrierFreeRoute(station_id={self.station_id}, {self.from_location} → {self.to_location})>"

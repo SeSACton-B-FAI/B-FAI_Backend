@@ -2,7 +2,7 @@
 Configuration module for B-FAI backend
 """
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Union
 
 
 class Settings(BaseSettings):
@@ -31,11 +31,7 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
 
     # CORS
-    CORS_ORIGINS: List[str] = [
-        "http://localhost:3000",
-        "http://localhost:8080",
-        "http://127.0.0.1:3000",
-    ]
+    CORS_ORIGINS: Union[str, List[str]] = "*"
 
     # Cache
     API_CACHE_DURATION_MINUTES: int = 5

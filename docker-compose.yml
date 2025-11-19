@@ -51,7 +51,7 @@ services:
       - ./scripts:/app/scripts
       - ./data:/app/data
       - ./logs:/app/logs
-      - ./static_data:/app/static_data
+      - ../정적 데이터:/app/static_data
     depends_on:
       db:
         condition: service_healthy

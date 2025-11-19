@@ -6,6 +6,8 @@ Route search router - 경로 탐색 API (AI 점수 기반)
 - routes 테이블: 실시간 GPS 거리 계산
 - optimal_boarding 테이블: 실시간 엘리베이터 위치 기반 계산
 """
+from __future__ import annotations
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -15,6 +17,7 @@ import math
 from app.database import get_db
 from app.models import Station, Exit, Route
 from app.services import SeoulMetroAPI
+from app.services.route_cache import route_cache
 
 router = APIRouter(prefix="/route", tags=["route"])
 
@@ -42,6 +45,140 @@ def calculate_gps_distance(lat1: float, lon1: float, lat2: float, lon2: float) -
     distance = R * c
 
     return distance
+
+
+def _calculate_direction(lat1: float, lon1: float, lat2: float, lon2: float) -> str:
+    """
+    두 GPS 좌표 간 방향 계산
+
+    Returns:
+        방향 문자열 ("북쪽", "남쪽", "동쪽", "서쪽", "북동쪽" 등)
+    """
+    delta_lat = lat2 - lat1
+    delta_lon = lon2 - lon1
+
+    # 주요 방향 결정
+    if abs(delta_lat) > abs(delta_lon) * 2:
+        # 남북 방향이 우세
+        return "북쪽" if delta_lat > 0 else "남쪽"
+    elif abs(delta_lon) > abs(delta_lat) * 2:
+        # 동서 방향이 우세
+        return "동쪽" if delta_lon > 0 else "서쪽"
+    else:
+        # 대각선 방향
+        ns = "북" if delta_lat > 0 else "남"
+        ew = "동" if delta_lon > 0 else "서"
+        return f"{ns}{ew}쪽"
+
+
+def _generate_walking_guide(
+    user_location: Dict,
+    exit_obj: Exit,
+    station_name: str
+) -> WalkingGuide:
+    """출발지에서 출발역 출입구까지 도보 안내 생성"""
+
+    # GPS 거리 계산
+    lat1, lon1 = user_location["lat"], user_location["lon"]
+    lat2, lon2 = float(exit_obj.latitude), float(exit_obj.longitude)
+    distance = calculate_gps_distance(lat1, lon1, lat2, lon2)
+
+    # 방향 계산
+    direction = _calculate_direction(lat1, lon1, lat2, lon2)
+
+    # 소요 시간 (도보 4km/h = 66.7m/분)
+    walking_time = max(1, int(distance / 66.7))
+
+    # 안내 텍스트 생성
+    guide_parts = [f"{direction}으로 약 {int(distance)}m 직진하시면"]
+    guide_parts.append(f"{station_name} {exit_obj.exit_number}번 출구가 있습니다.")
+
+    if exit_obj.has_elevator:
+        if exit_obj.elevator_location:
+            guide_parts.append(f"엘리베이터는 {exit_obj.elevator_location}에 있습니다.")
+        else:
+            guide_parts.append("이 출구에 엘리베이터가 있습니다.")
+
+    if exit_obj.landmark:
+        guide_parts.append(f"({exit_obj.landmark} 근처)")
+
+    guide_text = " ".join(guide_parts)
+
+    # 경사로 정보
+    has_slope = exit_obj.has_slope if hasattr(exit_obj, 'has_slope') and exit_obj.has_slope else False
+    slope_warning = exit_obj.slope_info if hasattr(exit_obj, 'slope_info') and exit_obj.slope_info else None
+
+    # 랜드마크
+    landmarks = []
+    if exit_obj.landmark:
+        landmarks = [exit_obj.landmark]
+
+    return WalkingGuide(
+        distance_meters=int(distance),
+        time_minutes=walking_time,
+        direction=direction,
+        guide_text=guide_text,
+        has_slope=has_slope,
+        slope_warning=slope_warning,
+        landmarks=landmarks
+    )
+
+
+def _create_exit_detail_info(exit_obj: Exit) -> ExitDetailInfo:
+    """Exit 객체에서 상세 정보 추출"""
+    return ExitDetailInfo(
+        exit_number=exit_obj.exit_number,
+        has_elevator=exit_obj.has_elevator,
+        elevator_type=exit_obj.elevator_type,
+        elevator_location=getattr(exit_obj, 'elevator_location', None),
+        elevator_button_info=getattr(exit_obj, 'elevator_button_info', None),
+        elevator_time_seconds=getattr(exit_obj, 'elevator_time_seconds', None),
+        gate_direction=getattr(exit_obj, 'gate_direction', None),
+        floor_level=exit_obj.floor_level,
+        gps={
+            "lat": float(exit_obj.latitude),
+            "lon": float(exit_obj.longitude)
+        } if exit_obj.latitude else None
+    )
+
+
+def _generate_arrival_walking_guide(
+    end_station: Station,
+    end_exit: Exit,
+    optimal_boarding: Dict,
+    db: Session
+) -> Dict:
+    """도착역 하차 후 출구까지 안내 생성"""
+    from app.models import ElevatorExitMapping
+
+    # 엘리베이터-출구 매핑 조회
+    mapping = db.query(ElevatorExitMapping).filter(
+        ElevatorExitMapping.station_id == end_station.station_id,
+        ElevatorExitMapping.connected_exit == end_exit.exit_number
+    ).first()
+
+    guide = {
+        "exit_number": end_exit.exit_number,
+        "car_position": f"{optimal_boarding['car_start']}-{optimal_boarding['car_end']}번째 칸",
+        "direction_from_train": "우측" if mapping and mapping.direction_from_train else "앞쪽",
+        "walking_distance_meters": mapping.walking_distance_meters if mapping else 50,
+        "walking_time_seconds": mapping.walking_time_seconds if mapping else 60,
+        "guide_text": "",
+        "features": ["추천", "큰길우선", "계단회피"]
+    }
+
+    # 안내 텍스트 생성
+    if mapping and mapping.walking_direction:
+        guide["guide_text"] = mapping.walking_direction
+    else:
+        guide["guide_text"] = f"{guide['car_position']}에서 하차 후 {guide['direction_from_train']}으로 가세요."
+
+    if end_exit.has_elevator:
+        if mapping and mapping.elevator_location:
+            guide["elevator_location"] = mapping.elevator_location
+        guide["guide_text"] += f" {end_exit.exit_number}번 출구 엘리베이터를 이용하세요."
+
+    return guide
 
 
 # Request/Response 모델
@@ -73,8 +210,32 @@ class CheckpointData(BaseModel):
     optional: bool = False
 
 
+class WalkingGuide(BaseModel):
+    """출발지→출발역 도보 안내"""
+    distance_meters: int
+    time_minutes: int
+    direction: str  # "북쪽", "남쪽" 등
+    guide_text: str  # "북쪽으로 약 120m 직진하시면..."
+    has_slope: bool = False
+    slope_warning: Optional[str] = None  # "가파른 경사로 주의"
+    landmarks: List[str] = []  # ["편의점", "버스정류장"]
+
+
+class ExitDetailInfo(BaseModel):
+    """출구 상세 정보"""
+    exit_number: str
+    has_elevator: bool
+    elevator_type: Optional[str]
+    elevator_location: Optional[str]  # "출구 왼쪽 10m"
+    elevator_button_info: Optional[str]  # "지하 2층 버튼을 누르세요"
+    elevator_time_seconds: Optional[int]  # 60
+    gate_direction: Optional[str]  # "엘리베이터 하차 후 직진"
+    floor_level: Optional[str]
+    gps: Optional[Dict]
+
+
 class RouteSearchResponse(BaseModel):
-    """경로 검색 응답"""
+    """경로 검색 응답 (간소화 - 상세 정보는 체크포인트/네비게이션 API에서)"""
     route_id: int
     start_station: str
     end_station: str
@@ -83,25 +244,16 @@ class RouteSearchResponse(BaseModel):
     estimated_time_minutes: int
     distance_meters: int
 
-    start_exit_number: Optional[str]
-    start_exit_has_elevator: bool
-    start_exit_gps: Optional[Dict]
-    end_exit_number: Optional[str]
-    end_exit_has_elevator: bool
-    end_exit_gps: Optional[Dict]
-
-    recommended_car_start: Optional[int]
-    recommended_car_end: Optional[int]
-    recommended_car_reason: Optional[str]
-
-    start_elevator_status: Dict
-    end_elevator_status: Dict
-    exit_closures: Dict
-
+    # 체크포인트 (GPS 좌표 포함 - 프론트 위치 감지용)
     checkpoints: List[CheckpointData]
 
-    status: str
+    # 실시간 열차 정보 (간단히)
+    realtime_train: Optional[Dict] = None
+
+    # 경고 사항
     warnings: List[str] = []
+
+    status: str
 
 
 @router.post("/search", response_model=RouteSearchResponse)
@@ -137,8 +289,8 @@ async def search_route(request: RouteSearchRequest, db: Session = Depends(get_db
     
     # 실시간 경로 객체 생성
     class RouteObject:
-        def __init__(self, start_id, end_id, line, direction, time, distance):
-            self.route_id = 0  # 실시간 생성이므로 ID 없음
+        def __init__(self, start_id, end_id, line, direction, time, distance, route_id):
+            self.route_id = route_id
             self.start_station_id = start_id
             self.end_station_id = end_id
             self.line = line
@@ -155,16 +307,20 @@ async def search_route(request: RouteSearchRequest, db: Session = Depends(get_db
     
     # 시간 계산 (평균 속도 40km/h)
     time = max(5, int(distance / 40000 * 60))  # 최소 5분
-    
+
+    # 유니크 route_id 생성
+    generated_route_id = route_cache.generate_route_id()
+
     route = RouteObject(
         start_id=start_station.station_id,
         end_id=end_station.station_id,
         line=start_station.line,
         direction=f"{end_station.name} 방면",
         time=time,
-        distance=distance
+        distance=distance,
+        route_id=generated_route_id
     )
-    
+
     routes = [route]  # 단일 경로
 
     # 3. Open API로 실시간 상태 확인
@@ -231,7 +387,22 @@ async def search_route(request: RouteSearchRequest, db: Session = Depends(get_db
         warnings.append(f"출입구 폐쇄: {exit_closures.get('reason', '')}")
         status = "주의"
 
-    # 8. 체크포인트 자동 생성
+    # 8. 출발지→출발역 도보 안내 생성
+    walking_guide = _generate_walking_guide(
+        user_location=request.user_location,
+        exit_obj=start_exit,
+        station_name=start_station.name
+    )
+
+    # 9. 도착역 하차 후 안내 생성
+    arrival_guide = _generate_arrival_walking_guide(
+        end_station=end_station,
+        end_exit=end_exit,
+        optimal_boarding=optimal_boarding,
+        db=db
+    )
+
+    # 10. 체크포인트 자동 생성
     checkpoints = _generate_checkpoints(
         route=best_route,
         start_station=start_station,
@@ -239,10 +410,87 @@ async def search_route(request: RouteSearchRequest, db: Session = Depends(get_db
         start_exit=start_exit,
         end_exit=end_exit,
         optimal_boarding=optimal_boarding,
-        user_tags=request.user_tags
+        user_tags=request.user_tags,
+        walking_guide=walking_guide,
+        arrival_guide=arrival_guide
     )
 
-    # 9. 응답 생성
+    # 11. 엘리베이터 상태 통합 (해당 역만 필터링)
+    def _filter_station_elevators(status: Dict, station_name: str) -> List[Dict]:
+        """해당 역의 엘리베이터만 필터링"""
+        station_key = station_name.replace("역", "")
+        filtered = []
+        for elev in status.get('elevators', []):
+            elev_station = elev.get('station_name', '').replace("역", "")
+            # 정확히 해당 역 이름만 포함 (잠실 vs 잠실나루 구분)
+            if station_key == elev_station.replace("(2)", "").replace("(8)", "").strip():
+                filtered.append(elev)
+        return filtered
+
+    elevator_status = {
+        "start_station": {
+            "name": start_station.name,
+            "elevators": _filter_station_elevators(start_elevator_status, start_station.name),
+            "all_working": start_elevator_status.get('all_working', True)
+        },
+        "end_station": {
+            "name": end_station.name,
+            "elevators": _filter_station_elevators(end_elevator_status, end_station.name),
+            "all_working": end_elevator_status.get('all_working', True)
+        }
+    }
+
+    # 12. 실시간 열차 도착 정보 조회
+    from app.services.api_service import RealtimeSubwayAPI
+
+    realtime_arrivals = RealtimeSubwayAPI.get_realtime_station_arrival(start_station.name)
+
+    # 요청된 방향의 열차만 필터링
+    realtime_train = None
+    if realtime_arrivals:
+        direction_key = best_route.direction.replace(" 방면", "")
+        filtered = [
+            arr for arr in realtime_arrivals
+            if direction_key in arr.get('terminal_station_name', '') or
+               direction_key in arr.get('train_line_name', '')
+        ]
+
+        if filtered:
+            first = filtered[0]
+            realtime_train = {
+                "arrival_minutes": first.get('arrival_minutes', 0),
+                "arrival_seconds": first.get('arrival_seconds', 0),
+                "arrival_message": first.get('arrival_message', ''),
+                "terminal_station": first.get('terminal_station_name', ''),
+                "train_status": first.get('train_status', '일반'),
+                "is_last_train": first.get('is_last_train', False),
+                "current_location": first.get('arrival_detail', '')
+            }
+        elif realtime_arrivals:
+            # 필터링 실패 시 첫 번째 열차
+            first = realtime_arrivals[0]
+            realtime_train = {
+                "arrival_minutes": first.get('arrival_minutes', 0),
+                "arrival_seconds": first.get('arrival_seconds', 0),
+                "arrival_message": first.get('arrival_message', ''),
+                "terminal_station": first.get('terminal_station_name', ''),
+                "train_status": first.get('train_status', '일반'),
+                "is_last_train": first.get('is_last_train', False),
+                "current_location": first.get('arrival_detail', '')
+            }
+
+    # 13. 경로 정보 캐시에 저장 (네비게이션 API에서 사용)
+    route_cache.save_route(
+        route_id=best_route.route_id,
+        start_station=start_station.name,
+        end_station=end_station.name,
+        line=best_route.line,
+        direction=best_route.direction,
+        checkpoints=[cp.model_dump() for cp in checkpoints],
+        need_elevator=request.user_tags.need_elevator
+    )
+
+    # 14. 응답 생성 (간소화)
     return RouteSearchResponse(
         route_id=best_route.route_id,
         start_station=start_station.name,
@@ -252,31 +500,16 @@ async def search_route(request: RouteSearchRequest, db: Session = Depends(get_db
         estimated_time_minutes=best_route.estimated_time_minutes,
         distance_meters=best_route.distance_meters,
 
-        start_exit_number=start_exit.exit_number,
-        start_exit_has_elevator=start_exit.has_elevator,
-        start_exit_gps={
-            "lat": float(start_exit.latitude),
-            "lon": float(start_exit.longitude)
-        } if start_exit.latitude else None,
-        end_exit_number=end_exit.exit_number,
-        end_exit_has_elevator=end_exit.has_elevator,
-        end_exit_gps={
-            "lat": float(end_exit.latitude),
-            "lon": float(end_exit.longitude)
-        } if end_exit.latitude else None,
-
-        recommended_car_start=optimal_boarding["car_start"],
-        recommended_car_end=optimal_boarding["car_end"],
-        recommended_car_reason=optimal_boarding["reason"],
-
-        start_elevator_status=start_elevator_status,
-        end_elevator_status=end_elevator_status,
-        exit_closures=exit_closures,
-
+        # 체크포인트 (프론트 위치 감지용)
         checkpoints=checkpoints,
 
-        status=status,
-        warnings=warnings
+        # 실시간 열차 정보
+        realtime_train=realtime_train,
+
+        # 경고 사항
+        warnings=warnings,
+
+        status=status
     )
 
 
@@ -321,12 +554,14 @@ def _select_best_exit(
 ) -> Optional[Exit]:
     """
     AI 점수 계산으로 최적 출입구 선택
-    
+
     우선순위:
-    1. 사용자 현재 위치에서 가장 가까운 출입구 (GPS 거리 계산) ⭐
-    2. 엘리베이터 필수 여부
+    1. 엘리베이터 필수 시 API 실시간 데이터로 정상 작동하는 엘리베이터 출구 선택
+    2. 사용자 현재 위치에서 가장 가까운 출입구 (GPS 거리 계산) ⭐
     3. 엘리베이터 실시간 상태
     """
+    import re
+
     exits = db.query(Exit).filter(
         Exit.station_id == station_id,
         Exit.latitude.isnot(None)  # GPS 좌표 있는 것만
@@ -335,15 +570,48 @@ def _select_best_exit(
     if not exits:
         return None
 
+    # API에서 외부 엘리베이터가 있는 출구 번호 추출 (정상 작동하는 것만)
+    api_elevator_exits = set()  # 정상 작동하는 엘리베이터 출구
+    api_broken_exits = set()  # 고장/점검 중인 엘리베이터 출구
+
+    for elev in elevator_status.get('elevators', []):
+        location = elev.get('location', '')
+        # "1번 출입구", "10번 출입구" 등에서 정확한 번호 추출
+        match = re.search(r'(\d+)번\s*출입구', location)
+        if match:
+            exit_num = match.group(1)
+            status = elev.get('status', '')
+            if status == '정상':
+                api_elevator_exits.add(exit_num)
+            else:
+                api_broken_exits.add(exit_num)
+
     best_exit = None
     best_score = -1
+    fallback_exit = None  # 엘리베이터 없을 때 가장 가까운 출구
 
     for exit in exits:
         score = 100
 
-        # 1. 엘리베이터 필수인데 없으면 제외
-        if user_tags.need_elevator and not exit.has_elevator:
-            continue
+        # API 데이터로 엘리베이터 유무 확인 (DB보다 우선)
+        has_working_elevator = exit.exit_number in api_elevator_exits
+        has_broken_elevator = exit.exit_number in api_broken_exits
+        has_any_elevator = has_working_elevator or has_broken_elevator or exit.has_elevator
+
+        # 1. 엘리베이터 필수인 경우
+        if user_tags.need_elevator:
+            if has_broken_elevator and not has_working_elevator:
+                # 점검 중인 엘리베이터만 있으면 크게 감점
+                score -= 200
+            elif not has_any_elevator:
+                # 엘리베이터 없으면 fallback 후보로만 저장
+                if user_location:
+                    lat1, lon1 = user_location["lat"], user_location["lon"]
+                    lat2, lon2 = float(exit.latitude), float(exit.longitude)
+                    distance = calculate_gps_distance(lat1, lon1, lat2, lon2)
+                    if fallback_exit is None or distance < fallback_exit[1]:
+                        fallback_exit = (exit, distance)
+                continue
 
         # 2. 사용자 현재 위치에서 거리 계산 (가장 중요!) ⭐
         if user_location:
@@ -357,21 +625,20 @@ def _select_best_exit(
             # 0m: +100점, 500m: +50점, 1000m: 0점
             distance_score = max(0, 100 - (distance / 10))
             score += distance_score
-        
-        # 3. 엘리베이터 있으면 가산점
-        if exit.has_elevator:
-            score += 50
 
-        # 4. 엘리베이터 고장 확인 (감점)
-        if exit.has_elevator and not elevator_status.get('all_working', True):
-            for elev in elevator_status.get('elevators', []):
-                if exit.exit_number in elev.get('location', ''):
-                    if elev.get('status') != '사용가능':
-                        score -= 50
+        # 3. 정상 작동하는 엘리베이터 있으면 큰 가산점
+        if has_working_elevator:
+            score += 100
+        elif has_any_elevator:
+            score += 30
 
         if score > best_score:
             best_score = score
             best_exit = exit
+
+    # 엘리베이터 있는 출구를 못 찾았으면 가장 가까운 출구 반환
+    if best_exit is None and fallback_exit:
+        best_exit = fallback_exit[0]
 
     return best_exit
 
@@ -440,14 +707,14 @@ def _generate_checkpoints(
     start_exit: Exit,
     end_exit: Exit,
     optimal_boarding: Dict,
-    user_tags: UserTags
+    user_tags: UserTags,
+    walking_guide: WalkingGuide = None,
+    arrival_guide: Dict = None
 ) -> List[CheckpointData]:
     """
-    체크포인트 자동 생성
-    
-    기획 문서:
-    checkpoints = generate_checkpoints(best_route, user_location)
-    # AI가 최적 경로를 기반으로 체크포인트 자동 생성
+    체크포인트 자동 생성 (간소화 - 상세 정보는 체크포인트/네비게이션 API에서)
+
+    프론트 위치 감지용 최소 정보만 포함
     """
     checkpoints = []
 
@@ -456,7 +723,13 @@ def _generate_checkpoints(
         id=0,
         type="출발지",
         location="현재 위치",
-        radius=30
+        radius=30,
+        data={
+            "station_name": start_station.name,
+            "exit_number": start_exit.exit_number,
+            "line": route.line,
+            "direction": route.direction
+        }
     ))
 
     # 1. 출발역 출입구
@@ -468,8 +741,10 @@ def _generate_checkpoints(
         longitude=float(start_exit.longitude) if start_exit.longitude else None,
         radius=30,
         data={
-            "has_elevator": start_exit.has_elevator,
-            "elevator_type": start_exit.elevator_type
+            "station_name": start_station.name,
+            "exit_number": start_exit.exit_number,
+            "line": route.line,
+            "direction": route.direction
         }
     ))
 
@@ -480,8 +755,9 @@ def _generate_checkpoints(
         location=f"{start_station.name} {route.line} {route.direction}",
         radius=30,
         data={
-            "best_car_start": optimal_boarding["car_start"],
-            "best_car_end": optimal_boarding["car_end"]
+            "station_name": start_station.name,
+            "line": route.line,
+            "direction": route.direction
         }
     ))
 
@@ -490,7 +766,12 @@ def _generate_checkpoints(
         id=3,
         type="승강장_대기",
         location=f"{start_station.name} {route.line} 승강장",
-        radius=30
+        radius=30,
+        data={
+            "station_name": start_station.name,
+            "line": route.line,
+            "direction": route.direction
+        }
     ))
 
     # 4. 열차 탑승
@@ -499,7 +780,10 @@ def _generate_checkpoints(
         type="열차_탑승",
         location="열차 내부",
         data={
-            "estimated_time": route.estimated_time_minutes
+            "start_station": start_station.name,
+            "end_station": end_station.name,
+            "line": route.line,
+            "direction": route.direction
         }
     ))
 
@@ -508,7 +792,13 @@ def _generate_checkpoints(
         id=5,
         type="도착역_승강장",
         location=f"{end_station.name} {route.line} 승강장",
-        radius=30
+        radius=30,
+        data={
+            "station_name": end_station.name,
+            "exit_number": end_exit.exit_number,
+            "line": route.line,
+            "direction": route.direction
+        }
     ))
 
     # 6. 도착역 출구
@@ -520,7 +810,10 @@ def _generate_checkpoints(
         longitude=float(end_exit.longitude) if end_exit.longitude else None,
         radius=30,
         data={
-            "has_elevator": end_exit.has_elevator
+            "station_name": end_station.name,
+            "exit_number": end_exit.exit_number,
+            "line": route.line,
+            "direction": route.direction
         }
     ))
 
@@ -531,7 +824,10 @@ def _generate_checkpoints(
             type="충전소",
             location=f"{end_station.name} 충전소",
             radius=50,
-            optional=True
+            optional=True,
+            data={
+                "station_name": end_station.name
+            }
         ))
 
     return checkpoints

@@ -1,0 +1,485 @@
+{
+  "info": {
+    "name": "BFAI - 배리어프리 길안내 API",
+    "_postman_id": "bfai-barrier-free-api-v3",
+    "description": "노인/교통약자를 위한 지하철 배리어프리 경로 안내 API\n\n## API 구조\n1. 역 목록 조회\n2. 경로 검색 (체크포인트 목록 + route_id 발급)\n3. 실시간 위치 안내 (5-10초 주기) - route_id로 경로 정보 자동 조회\n4. 체크포인트 상세 안내 (도달 시) - DB, OpenAPI, RAG 활용\n\n## 사용 흐름\n1. 경로 검색 → route_id + 체크포인트 목록 저장\n2. 프론트: current_checkpoint_id 관리\n3. 5-10초마다 /api/navigation/guide 호출 (route_id, 좌표, checkpoint_id만 전송)\n4. is_checkpoint_reached: true 시 checkpoint_id++\n\n## 간소화된 Navigation API\n- route_id로 경로 정보 자동 조회 (캐시)\n- 프론트는 route_id, 현재 좌표, checkpoint_id만 전송\n- 백엔드가 나머지 정보 (역명, 노선, 방면, 출구 등) 자동 처리\n\n## 체크포인트 목록\n- 0: 출발지\n- 1: 출발역_출구\n- 2: 출발역_승강장\n- 3: 승강장_대기\n- 4: 열차_탑승\n- 5: 도착역_승강장\n- 6: 도착역_출구\n- 7: 충전소 (선택)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "route_id",
+      "value": "123456789",
+      "type": "string",
+      "description": "경로 검색 후 받은 route_id (실제 테스트 시 업데이트 필요)"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. 역 목록 조회",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{base_url}}/api/route/stations",
+          "host": ["{{base_url}}"],
+          "path": ["api", "route", "stations"]
+        },
+        "description": "역 선택 드롭다운용 목록"
+      },
+      "response": [
+        {
+          "name": "역 목록 응답",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"count\": 20,\n  \"stations\": [\n    {\"id\": 1, \"name\": \"강남역\", \"line\": \"2호선\", \"latitude\": 37.498, \"longitude\": 127.027},\n    {\"id\": 2, \"name\": \"잠실역\", \"line\": \"2호선\", \"latitude\": 37.513, \"longitude\": 127.100}\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "name": "2. 경로 검색",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"start_station\": \"강남\",\n  \"end_station\": \"잠실\",\n  \"user_location\": {\n    \"lat\": 37.497952,\n    \"lon\": 127.027619\n  },\n  \"user_tags\": {\n    \"mobility_level\": \"wheelchair\",\n    \"need_elevator\": true,\n    \"prefer_short\": true,\n    \"need_charging_info\": true\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/route/search",
+          "host": ["{{base_url}}"],
+          "path": ["api", "route", "search"]
+        },
+        "description": "출발역→도착역 경로 검색\n\n응답:\n- route_id: 이후 navigation API에서 사용\n- checkpoints: GPS 좌표 포함\n\n중요: 응답의 route_id를 저장하여 navigation API 호출 시 사용"
+      },
+      "response": [
+        {
+          "name": "경로 검색 응답",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"route_id\": 123456789,\n  \"start_station\": \"강남역\",\n  \"end_station\": \"잠실역\",\n  \"line\": \"2호선\",\n  \"direction\": \"잠실역 방면\",\n  \"estimated_time_minutes\": 9,\n  \"distance_meters\": 6641,\n  \"checkpoints\": [\n    {\"id\": 0, \"type\": \"출발지\", \"location\": \"현재 위치\", \"latitude\": null, \"longitude\": null, \"radius\": 30, \"data\": {\"station_name\": \"강남역\", \"exit_number\": \"1\", \"line\": \"2호선\", \"direction\": \"잠실역 방면\"}},\n    {\"id\": 1, \"type\": \"출발역_출구\", \"location\": \"강남역 1번 출구\", \"latitude\": 37.49805, \"longitude\": 127.0286275, \"radius\": 30, \"data\": {\"station_name\": \"강남역\", \"exit_number\": \"1\", \"line\": \"2호선\", \"direction\": \"잠실역 방면\"}},\n    {\"id\": 2, \"type\": \"출발역_승강장\", \"location\": \"강남역 2호선 잠실역 방면\", \"latitude\": null, \"longitude\": null, \"radius\": 30, \"data\": {\"station_name\": \"강남역\", \"line\": \"2호선\", \"direction\": \"잠실역 방면\"}},\n    {\"id\": 3, \"type\": \"승강장_대기\", \"location\": \"강남역 2호선 승강장\", \"latitude\": null, \"longitude\": null, \"radius\": 30, \"data\": {\"station_name\": \"강남역\", \"line\": \"2호선\", \"direction\": \"잠실역 방면\"}},\n    {\"id\": 4, \"type\": \"열차_탑승\", \"location\": \"열차 내부\", \"latitude\": null, \"longitude\": null, \"radius\": 30, \"data\": {\"start_station\": \"강남역\", \"end_station\": \"잠실역\", \"line\": \"2호선\", \"direction\": \"잠실역 방면\"}},\n    {\"id\": 5, \"type\": \"도착역_승강장\", \"location\": \"잠실역 2호선 승강장\", \"latitude\": null, \"longitude\": null, \"radius\": 30, \"data\": {\"station_name\": \"잠실역\", \"exit_number\": \"1\", \"line\": \"2호선\", \"direction\": \"잠실역 방면\"}},\n    {\"id\": 6, \"type\": \"도착역_출구\", \"location\": \"잠실역 1번 출구\", \"latitude\": 37.513282, \"longitude\": 127.1011759, \"radius\": 30, \"data\": {\"station_name\": \"잠실역\", \"exit_number\": \"1\", \"line\": \"2호선\", \"direction\": \"잠실역 방면\"}},\n    {\"id\": 7, \"type\": \"충전소\", \"location\": \"잠실역 충전소\", \"latitude\": null, \"longitude\": null, \"radius\": 50, \"data\": {\"station_name\": \"잠실역\"}, \"optional\": true}\n  ],\n  \"realtime_train\": {\"arrival_minutes\": 2, \"arrival_message\": \"서초 진입\", \"terminal_station\": \"성수\", \"is_last_train\": false},\n  \"warnings\": [],\n  \"status\": \"정상\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "3-0. 실시간 안내 (출발지→출구 이동 중)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"route_id\": {{route_id}},\n  \"current_location\": {\"lat\": 37.497952, \"lon\": 127.027619},\n  \"current_checkpoint_id\": 0\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/navigation/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "navigation", "guide"]
+        },
+        "description": "체크포인트 0: 출발지에서 출발역 출구로 이동 중\n\n간소화된 요청: route_id, 좌표, checkpoint_id만 전송\n백엔드가 route_id로 경로 정보 자동 조회\n\nDB: 출구 GPS 좌표, 엘리베이터 위치\nOpenAPI: 엘리베이터 실시간 상태\nRAG: 노인 친화적 안내문"
+      },
+      "response": [
+        {
+          "name": "이동 중 (89m 남음)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"guide_text\": \"동쪽으로 약 89m 이동하세요. 강남역 1번 출구로 향합니다. 엘리베이터가 정상 운행 중입니다.\\n\\n1번 출구 엘리베이터는 지하 1층으로 연결됩니다. 도착하시면 엘리베이터 버튼 안내를 해드리겠습니다.\",\n  \"current_checkpoint_id\": 0,\n  \"current_checkpoint_type\": \"출발지\",\n  \"next_checkpoint\": {\"id\": 1, \"type\": \"출발역_출구\", \"location\": \"강남역 1번 출구\"},\n  \"distance_to_next\": 89,\n  \"direction\": \"동쪽\",\n  \"is_checkpoint_reached\": false,\n  \"realtime_info\": {\n    \"elevator_status\": {\n      \"elevators\": [{\"name\": \"엘리베이터 외부#1\", \"location\": \"1번 출입구\", \"status\": \"정상\", \"floors\": \"B1-1F\"}],\n      \"all_working\": true\n    }\n  },\n  \"status\": \"정상\"\n}"
+        },
+        {
+          "name": "거의 도착 (25m 남음)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"guide_text\": \"거의 다 왔습니다! 25m 앞에 1번 출구가 있습니다.\\n\\n엘리베이터는 출구 입구 왼쪽에 위치해 있습니다. 현재 정상 운행 중이니 안심하세요.\",\n  \"current_checkpoint_id\": 0,\n  \"current_checkpoint_type\": \"출발지\",\n  \"next_checkpoint\": {\"id\": 1, \"type\": \"출발역_출구\"},\n  \"distance_to_next\": 25,\n  \"direction\": \"동쪽\",\n  \"is_checkpoint_reached\": true,\n  \"reached_checkpoint_id\": 1,\n  \"realtime_info\": {\"elevator_status\": {\"all_working\": true}},\n  \"status\": \"정상\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "3-1. 실시간 안내 (출구→승강장 이동 중)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"route_id\": {{route_id}},\n  \"current_location\": {\"lat\": 37.49805, \"lon\": 127.0286275},\n  \"current_checkpoint_id\": 1\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/navigation/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "navigation", "guide"]
+        },
+        "description": "체크포인트 1: 출구에서 승강장으로 이동\n\nDB: 엘리베이터 버튼 정보, 소요시간\nOpenAPI: 엘리베이터 상태\nRAG: 엘리베이터 이용 팁"
+      },
+      "response": [
+        {
+          "name": "출구→승강장 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"guide_text\": \"강남역 1번 출구에서 2호선 잠실역 방면 승강장으로 이동합니다.\\n\\n엘리베이터를 이용하세요. 지하 1층 버튼을 누르세요. 약 60초 소요됩니다.\\n\\n엘리베이터 하차 후 잠실역 방면 안내 표지판을 따라가세요.\\n\\n엘리베이터 내부가 좁을 수 있으니 휠체어 방향 전환에 주의해주세요.\",\n  \"current_checkpoint_id\": 1,\n  \"current_checkpoint_type\": \"출발역_출구\",\n  \"next_checkpoint\": {\"id\": 2, \"type\": \"출발역_승강장\"},\n  \"distance_to_next\": null,\n  \"direction\": null,\n  \"is_checkpoint_reached\": false,\n  \"realtime_info\": {\n    \"elevator_status\": {\n      \"elevators\": [{\"name\": \"엘리베이터 외부#1\", \"location\": \"1번 출입구\", \"status\": \"정상\"}],\n      \"all_working\": true\n    }\n  },\n  \"status\": \"정상\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "3-2. 실시간 안내 (승강장 도착)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"route_id\": {{route_id}},\n  \"current_location\": {\"lat\": 37.49805, \"lon\": 127.0286275},\n  \"current_checkpoint_id\": 2\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/navigation/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "navigation", "guide"]
+        },
+        "description": "체크포인트 2: 승강장 도착, 대기 위치 안내\n\nDB: 최적 탑승 칸 (PlatformEdge)\nOpenAPI: 실시간 열차 도착\nRAG: 승강장 이용 팁"
+      },
+      "response": [
+        {
+          "name": "승강장 대기 위치 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"guide_text\": \"강남역 2호선 잠실역 방면 승강장입니다.\\n\\n7-8번째 칸 앞에서 대기해주세요. 도착역 잠실역에서 엘리베이터와 가장 가까운 위치입니다.\\n\\n다음 열차가 약 3분 후 도착합니다.\\n\\n승강장과 열차 사이 간격이 있으니 탑승 시 주의해주세요. 역무원에게 도움을 요청하실 수 있습니다.\",\n  \"current_checkpoint_id\": 2,\n  \"current_checkpoint_type\": \"출발역_승강장\",\n  \"next_checkpoint\": {\"id\": 3, \"type\": \"승강장_대기\"},\n  \"distance_to_next\": null,\n  \"direction\": null,\n  \"is_checkpoint_reached\": false,\n  \"realtime_info\": {\n    \"train_arrival\": [{\"arrival_minutes\": 3, \"terminal_station_name\": \"성수\", \"arrival_message\": \"서초 진입\"}]\n  },\n  \"status\": \"정상\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "3-3. 실시간 안내 (열차 대기 중)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"route_id\": {{route_id}},\n  \"current_location\": {\"lat\": 37.49805, \"lon\": 127.0286275},\n  \"current_checkpoint_id\": 3\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/navigation/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "navigation", "guide"]
+        },
+        "description": "체크포인트 3: 승강장에서 열차 대기\n\nOpenAPI: 실시간 열차 도착 정보, 막차 여부\nRAG: 탑승 시 주의사항"
+      },
+      "response": [
+        {
+          "name": "열차 곧 도착",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"guide_text\": \"열차가 곧 도착합니다! 승차 준비를 해주세요.\\n\\n행선지: 성수\\n\\n현재 위치: 역삼 진입\\n\\n문이 열리면 천천히 탑승해주세요. 휠체어 전용 공간은 각 칸 끝부분에 있습니다.\",\n  \"current_checkpoint_id\": 3,\n  \"current_checkpoint_type\": \"승강장_대기\",\n  \"next_checkpoint\": {\"id\": 4, \"type\": \"열차_탑승\"},\n  \"distance_to_next\": null,\n  \"direction\": null,\n  \"is_checkpoint_reached\": false,\n  \"realtime_info\": {\n    \"train_arrival\": [{\n      \"arrival_minutes\": 1,\n      \"arrival_message\": \"역삼 진입\",\n      \"terminal_station_name\": \"성수\",\n      \"is_last_train\": false\n    }]\n  },\n  \"status\": \"정상\"\n}"
+        },
+        {
+          "name": "막차 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"guide_text\": \"다음 열차가 약 5분 후 도착합니다.\\n\\n행선지: 성수\\n\\n이 열차가 막차입니다!\\n\\n막차이니 놓치지 않도록 주의해주세요.\",\n  \"current_checkpoint_id\": 3,\n  \"current_checkpoint_type\": \"승강장_대기\",\n  \"next_checkpoint\": {\"id\": 4, \"type\": \"열차_탑승\"},\n  \"realtime_info\": {\n    \"train_arrival\": [{\n      \"arrival_minutes\": 5,\n      \"terminal_station_name\": \"성수\",\n      \"is_last_train\": true\n    }]\n  },\n  \"status\": \"정상\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "3-4. 실시간 안내 (열차 탑승 중)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"route_id\": {{route_id}},\n  \"current_location\": {\"lat\": 37.505, \"lon\": 127.05},\n  \"current_checkpoint_id\": 4\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/navigation/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "navigation", "guide"]
+        },
+        "description": "체크포인트 4: 열차 탑승 중 하차 안내\n\nOpenAPI: 도착역 엘리베이터 상태 미리 확인\nRAG: 하차 준비 안내"
+      },
+      "response": [
+        {
+          "name": "열차 탑승 중",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"guide_text\": \"열차에 탑승하셨습니다.\\n\\n잠실역에서 하차하세요. 약 9분 소요됩니다.\\n\\n하차 후 1번 출구 방향으로 이동하시면 됩니다.\\n\\n잠실역 엘리베이터는 현재 정상 운행 중입니다. 1번 출입구에서 지상으로 나가실 수 있습니다.\\n\\n하차 전 미리 출입문 가까이 이동해주세요.\",\n  \"current_checkpoint_id\": 4,\n  \"current_checkpoint_type\": \"열차_탑승\",\n  \"next_checkpoint\": {\"id\": 5, \"type\": \"도착역_승강장\"},\n  \"distance_to_next\": null,\n  \"direction\": null,\n  \"is_checkpoint_reached\": false,\n  \"realtime_info\": {\n    \"end_station_elevator\": {\n      \"elevators\": [\n        {\"name\": \"엘리베이터 외부#1\", \"location\": \"1번 출입구\", \"status\": \"정상\"},\n        {\"name\": \"엘리베이터 외부#2\", \"location\": \"6번 출입구\", \"status\": \"정상\"}\n      ],\n      \"all_working\": true\n    }\n  },\n  \"status\": \"정상\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "3-5. 실시간 안내 (도착역 승강장)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"route_id\": {{route_id}},\n  \"current_location\": {\"lat\": 37.513282, \"lon\": 127.1011759},\n  \"current_checkpoint_id\": 5\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/navigation/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "navigation", "guide"]
+        },
+        "description": "체크포인트 5: 도착역 하차 후 출구 안내\n\nDB: 출구 방향, 엘리베이터 위치\nOpenAPI: 엘리베이터 상태\nRAG: 하차 후 이동 팁"
+      },
+      "response": [
+        {
+          "name": "도착역 하차 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"guide_text\": \"잠실역에 도착하셨습니다!\\n\\n7-8번째 칸에서 하차하셨다면 앞쪽으로 이동해주세요.\\n\\n1번 출구 방향으로 이동하세요.\\n\\n엘리베이터는 1번 출입구에 있습니다. 현재 정상 운행 중입니다.\\n\\n노란색 점자블록을 따라가시면 엘리베이터를 찾기 쉽습니다.\",\n  \"current_checkpoint_id\": 5,\n  \"current_checkpoint_type\": \"도착역_승강장\",\n  \"next_checkpoint\": {\"id\": 6, \"type\": \"도착역_출구\"},\n  \"distance_to_next\": null,\n  \"direction\": null,\n  \"is_checkpoint_reached\": false,\n  \"realtime_info\": {\n    \"elevator_status\": {\n      \"elevators\": [{\"name\": \"엘리베이터 외부#2\", \"location\": \"1번 출입구\", \"status\": \"정상\"}],\n      \"all_working\": true\n    }\n  },\n  \"status\": \"정상\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "3-6. 실시간 안내 (도착역 출구)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"route_id\": {{route_id}},\n  \"current_location\": {\"lat\": 37.513282, \"lon\": 127.1011759},\n  \"current_checkpoint_id\": 6\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/navigation/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "navigation", "guide"]
+        },
+        "description": "체크포인트 6: 도착역 출구 최종 안내\n\nDB: 엘리베이터 버튼 정보\nRAG: 지상 도착 안내"
+      },
+      "response": [
+        {
+          "name": "최종 출구 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"guide_text\": \"잠실역 1번 출구입니다.\\n\\n엘리베이터를 이용하세요. 지상 1층 버튼을 누르세요. 약 45초 후 지상에 도착합니다.\\n\\n목적지에 도착하셨습니다! 안전한 이동이 되셨길 바랍니다.\\n\\n1번 출구 앞에는 버스정류장과 택시 승강장이 있습니다.\",\n  \"current_checkpoint_id\": 6,\n  \"current_checkpoint_type\": \"도착역_출구\",\n  \"next_checkpoint\": {\"id\": 7, \"type\": \"충전소\"},\n  \"distance_to_next\": null,\n  \"direction\": null,\n  \"is_checkpoint_reached\": false,\n  \"realtime_info\": {},\n  \"status\": \"정상\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "3-7. 실시간 안내 (충전소)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"route_id\": {{route_id}},\n  \"current_location\": {\"lat\": 37.513282, \"lon\": 127.1011759},\n  \"current_checkpoint_id\": 7\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/navigation/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "navigation", "guide"]
+        },
+        "description": "체크포인트 7: 휠체어 충전소 안내 (선택)\n\nDB: 충전소 위치\nOpenAPI: 충전소 운영 상태\nRAG: 충전소 이용 팁"
+      },
+      "response": [
+        {
+          "name": "충전소 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"guide_text\": \"잠실역 주변 휠체어 충전소를 안내해드립니다.\\n\\n위치: 지하 1층 대합실, 6번 출구 방면\\n운영 시간: 05:30 ~ 24:00\\n\\n현재 충전 가능합니다.\\n\\n충전 중에는 휠체어를 잠그고 귀중품을 챙겨주세요.\",\n  \"current_checkpoint_id\": 7,\n  \"current_checkpoint_type\": \"충전소\",\n  \"next_checkpoint\": null,\n  \"distance_to_next\": null,\n  \"direction\": null,\n  \"is_checkpoint_reached\": false,\n  \"realtime_info\": {},\n  \"status\": \"정상\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "4-0. 체크포인트 안내 (출발지)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"checkpoint_id\": 0,\n  \"station_name\": \"강남역\",\n  \"exit_number\": \"1\",\n  \"need_elevator\": true,\n  \"user_location\": {\"lat\": 37.497952, \"lon\": 127.027619}\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/checkpoint/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "checkpoint", "guide"]
+        },
+        "description": "체크포인트 0 도달 시 상세 안내\n\nDB: 출구 좌표, 엘리베이터 정보\nOpenAPI: 엘리베이터 상태\nRAG: 도보 이동 팁"
+      },
+      "response": [
+        {
+          "name": "출발지 상세 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"checkpoint_id\": 0,\n  \"checkpoint_type\": \"출발지\",\n  \"guide_text\": \"현재 위치에서 강남역 1번 출구로 이동합니다.\\n\\n동쪽으로 약 89m 직진하세요. 약 1분 소요됩니다.\\n\\n1번 출구에 엘리베이터가 있습니다. 현재 정상 운행 중입니다.\\n\\n이동 중 경사로가 있을 수 있으니 주의해주세요. 보도블록 턱에 주의하시고, 어려우시면 주변 분들께 도움을 요청하세요.\",\n  \"status\": \"정상\",\n  \"db_data\": {\n    \"exit_gps\": {\"lat\": 37.49805, \"lon\": 127.0286275},\n    \"distance_meters\": 89,\n    \"direction\": \"동쪽\"\n  },\n  \"api_data\": {\n    \"elevator_status\": {\n      \"elevators\": [{\"location\": \"1번 출입구\", \"status\": \"정상\"}],\n      \"all_working\": true\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "4-1. 체크포인트 안내 (출발역 출구)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"checkpoint_id\": 1,\n  \"station_name\": \"강남역\",\n  \"exit_number\": \"1\",\n  \"line\": \"2호선\",\n  \"direction\": \"잠실역 방면\",\n  \"need_elevator\": true\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/checkpoint/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "checkpoint", "guide"]
+        },
+        "description": "체크포인트 1 도달 시 엘리베이터 상세 안내\n\nDB: 엘리베이터 위치, 버튼, 소요시간\nOpenAPI: 실시간 운행 상태\nRAG: 엘리베이터 이용 팁"
+      },
+      "response": [
+        {
+          "name": "출발역 출구 상세 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"checkpoint_id\": 1,\n  \"checkpoint_type\": \"출입구\",\n  \"guide_text\": \"강남역 1번 출구에 도착하셨습니다.\\n\\n엘리베이터 위치: 출구 입구 왼쪽 10m\\n지하 1층 버튼을 누르세요.\\n약 60초 소요됩니다.\\n\\n현재 엘리베이터가 정상 운행 중입니다.\\n\\n엘리베이터 하차 후 '잠실역 방면' 안내 표지판을 따라가세요. 바닥의 노란색 점자블록을 따라가시면 승강장을 찾기 쉽습니다.\\n\\n엘리베이터 내부가 좁을 수 있으니 탑승 전 다른 이용객이 내리신 후 탑승해주세요.\",\n  \"status\": \"정상\",\n  \"db_data\": {\n    \"exit_number\": \"1\",\n    \"has_elevator\": true,\n    \"elevator_location\": \"출구 입구 왼쪽 10m\",\n    \"elevator_button_info\": \"지하 1층 버튼을 누르세요\",\n    \"elevator_time_seconds\": 60,\n    \"gps\": {\"lat\": 37.49805, \"lon\": 127.0286275}\n  },\n  \"api_data\": {\n    \"elevator_status\": {\n      \"elevators\": [{\"name\": \"엘리베이터 외부#1\", \"location\": \"1번 출입구\", \"status\": \"정상\", \"floors\": \"B1-1F\"}],\n      \"all_working\": true\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "4-2. 체크포인트 안내 (출발역 승강장)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"checkpoint_id\": 2,\n  \"station_name\": \"강남역\",\n  \"line\": \"2호선\",\n  \"direction\": \"잠실역 방면\",\n  \"need_elevator\": true\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/checkpoint/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "checkpoint", "guide"]
+        },
+        "description": "체크포인트 2 도달 시 탑승 위치 안내\n\nDB: 최적 탑승 칸 (PlatformEdge 데이터)\nOpenAPI: 열차 도착 정보\nRAG: 승강장 이용 팁"
+      },
+      "response": [
+        {
+          "name": "승강장 상세 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"checkpoint_id\": 2,\n  \"checkpoint_type\": \"승강장\",\n  \"guide_text\": \"강남역 2호선 잠실역 방면 승강장입니다.\\n\\n7-8번째 칸 앞에서 대기해주세요.\\n이 위치가 도착역 잠실역 엘리베이터와 가장 가까운 곳입니다.\\n\\n승강장과 열차 사이 간격이 10cm 정도 있습니다. 휠체어 탑승 시 주의해주세요.\\n\\n도움이 필요하시면 승강장 비상 인터폰을 이용하시거나 역무원을 호출해주세요. 역무원이 탑승을 도와드립니다.\",\n  \"status\": \"정상\",\n  \"db_data\": {\n    \"best_car\": \"7-8번째 칸\",\n    \"reason\": \"도착역 엘리베이터와 가까움\",\n    \"platform_gap\": \"10cm\"\n  },\n  \"api_data\": {\n    \"realtime_train\": {\n      \"arrival_minutes\": 3,\n      \"terminal_station\": \"성수\"\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "4-3. 체크포인트 안내 (승강장 대기)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"checkpoint_id\": 3,\n  \"station_name\": \"강남역\",\n  \"line\": \"2호선\",\n  \"direction\": \"잠실역 방면\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/checkpoint/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "checkpoint", "guide"]
+        },
+        "description": "체크포인트 3: 실시간 열차 도착 안내\n\nOpenAPI: 실시간 열차 위치, 도착 시간, 막차 여부\nRAG: 탑승 준비 안내"
+      },
+      "response": [
+        {
+          "name": "승강장 대기 상세 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"checkpoint_id\": 3,\n  \"checkpoint_type\": \"승강장_대기\",\n  \"guide_text\": \"강남역 2호선 잠실역 방면 승강장입니다.\\n\\n7-8번째 칸 앞에서 대기해주세요.\\n\\n다음 열차: 약 2분 후 도착\\n행선지: 성수\\n현재 위치: 서초 진입\\n\\n열차가 도착하면 문이 열릴 때까지 기다려주세요. 내리는 분들이 모두 내린 후 탑승해주세요.\\n\\n휠체어 전용 공간은 각 칸의 양 끝에 있습니다.\",\n  \"status\": \"정상\",\n  \"api_data\": {\n    \"realtime_train\": {\n      \"arrival_minutes\": 2,\n      \"arrival_message\": \"서초 진입\",\n      \"terminal_station\": \"성수\",\n      \"is_last_train\": false,\n      \"train_status\": \"일반\"\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "4-4. 체크포인트 안내 (열차 탑승)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"checkpoint_id\": 4,\n  \"station_name\": \"잠실역\",\n  \"line\": \"2호선\",\n  \"direction\": \"잠실역 방면\",\n  \"need_elevator\": true\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/checkpoint/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "checkpoint", "guide"]
+        },
+        "description": "체크포인트 4: 열차 탑승 중 하차 준비 안내\n\nDB: 도착역 정보\nOpenAPI: 도착역 엘리베이터 상태\nRAG: 하차 준비 팁"
+      },
+      "response": [
+        {
+          "name": "열차 탑승 상세 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"checkpoint_id\": 4,\n  \"checkpoint_type\": \"열차_탑승\",\n  \"guide_text\": \"열차 탑승 중입니다.\\n\\n잠실역에서 하차합니다. 약 9분 소요됩니다.\\n\\n하차 후 1번 출구 방향으로 이동하세요.\\n\\n잠실역 1번 출구 엘리베이터가 정상 운행 중입니다.\\n\\n도착 1-2분 전에 미리 출입문 가까이 이동해주세요. 하차 시 승강장과 열차 사이 간격에 주의해주세요.\\n\\n도움이 필요하시면 차내 비상 인터폰을 이용해주세요.\",\n  \"status\": \"정상\",\n  \"db_data\": {\n    \"end_station\": \"잠실역\",\n    \"exit_number\": \"1\",\n    \"estimated_time\": 9\n  },\n  \"api_data\": {\n    \"elevator_status\": {\n      \"elevators\": [{\"location\": \"1번 출입구\", \"status\": \"정상\"}],\n      \"all_working\": true\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "4-5. 체크포인트 안내 (도착역 승강장)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"checkpoint_id\": 5,\n  \"station_name\": \"잠실역\",\n  \"exit_number\": \"1\",\n  \"line\": \"2호선\",\n  \"direction\": \"잠실역 방면\",\n  \"need_elevator\": true\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/checkpoint/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "checkpoint", "guide"]
+        },
+        "description": "체크포인트 5: 하차 후 출구 방향 안내\n\nDB: 출구 방향, 엘리베이터 위치\nOpenAPI: 엘리베이터 상태\nRAG: 이동 팁"
+      },
+      "response": [
+        {
+          "name": "도착역 승강장 상세 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"checkpoint_id\": 5,\n  \"checkpoint_type\": \"도착역_승강장\",\n  \"guide_text\": \"잠실역에 도착하셨습니다!\\n\\n7-8번째 칸에서 하차하셨다면 앞쪽(잠실나루 방면)으로 이동해주세요.\\n\\n1번 출구 방향으로 이동하세요.\\n\\n엘리베이터 위치: 1번 출입구 (잠실나루 방면 5-2 근처)\\n현재 정상 운행 중입니다.\\n\\n바닥의 노란색 점자블록을 따라가시면 엘리베이터를 찾기 쉽습니다.\\n\\n출구까지 약 50m, 1분 정도 소요됩니다.\",\n  \"status\": \"정상\",\n  \"db_data\": {\n    \"exit_number\": \"1\",\n    \"direction_from_train\": \"앞쪽\",\n    \"elevator_location\": \"1번 출입구\",\n    \"walking_distance\": 50\n  },\n  \"api_data\": {\n    \"elevator_status\": {\n      \"elevators\": [\n        {\"name\": \"엘리베이터 외부#2\", \"location\": \"1번 출입구\", \"status\": \"정상\", \"floors\": \"B1-1F\"}\n      ],\n      \"all_working\": true\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "4-6. 체크포인트 안내 (도착역 출구)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"checkpoint_id\": 6,\n  \"station_name\": \"잠실역\",\n  \"exit_number\": \"1\",\n  \"need_elevator\": true\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/checkpoint/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "checkpoint", "guide"]
+        },
+        "description": "체크포인트 6: 최종 출구 안내\n\nDB: 엘리베이터 버튼, 소요시간\nOpenAPI: 엘리베이터 상태\nRAG: 지상 도착 안내"
+      },
+      "response": [
+        {
+          "name": "도착역 출구 상세 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"checkpoint_id\": 6,\n  \"checkpoint_type\": \"도착역_출구\",\n  \"guide_text\": \"잠실역 1번 출구입니다.\\n\\n엘리베이터 위치: 1번 출입구\\n지상 1층 버튼을 누르세요.\\n약 45초 후 지상에 도착합니다.\\n\\n현재 엘리베이터가 정상 운행 중입니다.\\n\\n목적지에 도착하셨습니다! 안전한 이동이 되셨길 바랍니다.\\n\\n1번 출구 앞에는 버스 정류장(잠실역, 잠실광역환승센터)과 택시 승강장이 있습니다.\\n롯데월드몰은 출구에서 좌측 200m 거리에 있습니다.\",\n  \"status\": \"정상\",\n  \"db_data\": {\n    \"exit_number\": \"1\",\n    \"has_elevator\": true,\n    \"elevator_location\": \"1번 출입구\",\n    \"elevator_button_info\": \"지상 1층 버튼을 누르세요\",\n    \"elevator_time_seconds\": 45,\n    \"gps\": {\"lat\": 37.513282, \"lon\": 127.1011759}\n  },\n  \"api_data\": {\n    \"elevator_status\": {\n      \"all_working\": true\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "4-7. 체크포인트 안내 (충전소)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"checkpoint_id\": 7,\n  \"station_name\": \"잠실역\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/checkpoint/guide",
+          "host": ["{{base_url}}"],
+          "path": ["api", "checkpoint", "guide"]
+        },
+        "description": "체크포인트 7: 휠체어 충전소 안내 (선택)\n\nDB: 충전소 위치\nOpenAPI: 충전소 운영 상태\nRAG: 충전소 이용 팁"
+      },
+      "response": [
+        {
+          "name": "충전소 상세 안내",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"checkpoint_id\": 7,\n  \"checkpoint_type\": \"충전소\",\n  \"guide_text\": \"잠실역 휠체어 충전소 안내\\n\\n위치: 지하 1층 대합실, 6번 출구 방면\\n운영 시간: 05:30 ~ 24:00\\n\\n현재 충전 가능합니다.\\n\\n충전 소요 시간: 약 30분~1시간 (배터리 상태에 따라 다름)\\n\\n충전 중에는 휠체어 브레이크를 잠그고 귀중품을 챙겨주세요.\\n\\n문의: 역무실 (02-6110-2161)\",\n  \"status\": \"정상\",\n  \"db_data\": {\n    \"location\": \"지하 1층 대합실 6번 출구 방면\",\n    \"operating_hours\": \"05:30 ~ 24:00\"\n  },\n  \"api_data\": {\n    \"charger_status\": \"available\"\n  }\n}"
+        }
+      ]
+    }
+  ]
+}

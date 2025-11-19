@@ -7,7 +7,7 @@ from loguru import logger
 
 from app.config import settings
 from app.database import init_db
-from app.routers import route, checkpoint
+from app.routers import route, checkpoint, navigation
 
 # Logger 설정
 logger.add(
@@ -47,7 +47,7 @@ app = FastAPI(
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=["*"] if settings.CORS_ORIGINS == "*" else settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -57,6 +57,7 @@ app.add_middleware(
 # 라우터 등록
 app.include_router(route.router, prefix="/api")
 app.include_router(checkpoint.router, prefix="/api")
+app.include_router(navigation.router)  # 이미 /api/navigation prefix 포함
 
 
 # Startup event
@@ -71,6 +72,15 @@ async def startup_event():
         logger.info("✅ Database initialized")
     except Exception as e:
         logger.error(f"❌ Database initialization failed: {e}")
+
+    # RAG 지식 베이스 초기화
+    try:
+        from app.services.rag_service import rag_service
+        logger.info("📚 Initializing RAG knowledge base...")
+        rag_service.initialize_subway_knowledge()
+        logger.info("✅ RAG knowledge base initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ RAG initialization failed (non-critical): {e}")
 
     logger.info(f"📡 Server running on {settings.API_HOST}:{settings.API_PORT}")
     logger.info(f"📖 API Documentation: http://{settings.API_HOST}:{settings.API_PORT}/docs")

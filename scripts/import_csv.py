@@ -28,11 +28,13 @@ from app.models import (
 
 # CSV 파일 경로
 # Docker 컨테이너 내부에서는 /app/static_data
-# 로컬에서는 backend/../static_data
+# 로컬에서는 backend/static_data
 if os.path.exists("/app/static_data"):
     CSV_BASE_PATH = Path("/app/static_data")
 else:
-    CSV_BASE_PATH = Path(__file__).parent.parent.parent / "static_data"
+    # 스크립트 위치: backend/scripts/import_csv.py
+    # static_data 위치: backend/static_data
+    CSV_BASE_PATH = Path(__file__).parent.parent / "static_data"
 
 
 def init_database():
@@ -125,16 +127,16 @@ def import_exits(db: Session):
     """
     print("\n🚪 Importing exits with GPS coordinates...")
 
-  # 1. 출입구 GPS 좌표 로드
+    # 1. 출입구 GPS 좌표 로드
     coords_file = CSV_BASE_PATH / "station_exit_coordinates.csv"
-    # utf-8-sig가 안 먹힐 경우를 대비해 utf-8로 읽고 강제 처리
-    coords_df = pd.read_csv(coords_file, encoding='utf-8') 
+    # BOM 문자 자동 처리를 위해 utf-8-sig 사용
+    coords_df = pd.read_csv(coords_file, encoding='utf-8-sig')
+
+    # 컬럼명 공백 및 BOM 문자 제거
+    coords_df.columns = coords_df.columns.str.strip().str.replace('\ufeff', '')
     
-    # ✅ [핵심] 컬럼명 강제 청소 (BOM 문자 제거 + 공백 제거)
-    coords_df.columns = coords_df.columns.str.replace('\ufeff', '').str.strip()
-    
-    # 확인용 디버그 코드 (그대로 두셔도 됩니다)
-    print(f"🔍 Cleaned Columns: {coords_df.columns.tolist()}")
+    # 확인용 디버그 코드
+    print(f"🔍 Columns: {coords_df.columns.tolist()}")
 
     # 2. 엘리베이터 정보 로드 (EUC-KR)
     elevator_file = CSV_BASE_PATH / "서울교통공사 휠체어경사로 설치 현황_20240331.csv"
@@ -257,12 +259,20 @@ def import_transfer_info(db: Session):
                 station = db.query(Station).filter(Station.name.contains(station_name[:2])).first()
 
                 if station:
+                    # 환승소요시간 파싱 (예: "3:45" → 225초)
+                    time_str = str(row['환승소요시간'])
+                    if ':' in time_str:
+                        parts = time_str.split(':')
+                        time_seconds = int(parts[0]) * 60 + int(parts[1])
+                    else:
+                        time_seconds = int(time_str)
+                    
                     transfer = TransferInfo(
                         station_id=station.station_id,
                         from_line=row['호선'],
                         to_line=row['환승노선'],
                         distance_meters=int(row['환승거리']),
-                        time_seconds=int(row['환승소요시간'].replace(':', ''))
+                        time_seconds=time_seconds
                     )
                     db.add(transfer)
                     count += 1

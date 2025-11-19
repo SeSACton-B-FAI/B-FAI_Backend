@@ -12,6 +12,7 @@ from app.models.models import (
     OptimalBoarding,
     TransferInfo,
     ChargingStation,
+    ElevatorExitMapping,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "OptimalBoarding",
     "TransferInfo",
     "ChargingStation",
+    "ElevatorExitMapping",
 ]

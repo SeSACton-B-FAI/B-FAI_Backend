@@ -140,16 +140,29 @@ class GeneralSeoulAPI(BaseAPIClient):
         """
         엘리베이터/에스컬레이터 가동 상태 조회
         - 전체 데이터를 가져온 후 필터링 (대용량 API)
+        - 정확한 역 이름 매칭으로 잠실/잠실나루/잠실새내 구분
         """
         all_items = GeneralSeoulAPI._fetch_all_pages("SeoulMetroFaciInfo", page_size=1000, max_total=3000)
 
-        # 역 이름 필터링
+        # 역 이름 필터링 (정확한 매칭)
         if station_name:
-            # "역" 제거하고 비교
-            station_key = station_name.replace("역", "")
+            # "역" 제거하고 기본 역 이름 추출
+            station_key = station_name.replace("역", "").strip()
+
+            def is_exact_match(item_station_name: str) -> bool:
+                """정확한 역 이름 매칭 (잠실 vs 잠실나루 구분)"""
+                item_name = item_station_name.replace("역", "").strip()
+
+                # 호선 정보 제거: "잠실(2)" -> "잠실", "강남(2)" -> "강남"
+                import re
+                item_name = re.sub(r'\(\d+\)', '', item_name).strip()
+
+                # 정확히 일치하는 경우만
+                return item_name == station_key
+
             all_items = [
                 item for item in all_items
-                if station_key in item.get('STN_NM', '').replace("역", "")
+                if is_exact_match(item.get('STN_NM', ''))
             ]
 
         # 엘리베이터만 파싱 (ELVTR_SE == 'EV')
