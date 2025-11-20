@@ -53,7 +53,7 @@ docker-compose exec backend python scripts/import_csv.py
 docker-compose exec backend python scripts/populate_barrier_free_data.py
 ```
 
-> **참고**: CSV 데이터는 `../정적 데이터` 폴더에서 읽어옵니다.
+> **참고**: CSV 데이터는 `static_data` 폴더에서 읽어옵니다.
 
 ### 4. API 테스트
 
@@ -224,7 +224,9 @@ backend/
 ├── scripts/
 │   ├── import_csv.py                  # CSV 데이터 임포트
 │   └── populate_barrier_free_data.py  # RAG 벡터 데이터 임포트
-../정적 데이터/                          # CSV 데이터 (Docker에서 마운트)
+├── static_data/                        # 정적 CSV 데이터
+├── dynamic_data/                       # 동적 API 문서
+├── data/                               # ChromaDB 벡터 저장소
 ├── docker-compose.yml
 ├── Dockerfile
 └── requirements.txt
